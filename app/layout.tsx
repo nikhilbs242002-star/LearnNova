@@ -1,21 +1,21 @@
+
 import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "LearnNova",
-  description: "AI-powered learning platform",
+  title: "LearnNova | Your Learning Space",
+  description:
+    "Your personalized AI-powered learning platform for smarter learning and academic growth.",
 };
 
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode;
-}) {
+}>) {
   return (
-    <html lang="en" className="h-full antialiased">
-      <body className="min-h-full flex flex-col">
-        {children}
-      </body>
+    <html lang="en">
+      <body>{children}</body>
     </html>
   );
 }

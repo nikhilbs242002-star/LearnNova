@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { Agent, fetch as undiciFetch } from "undici";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -9,11 +10,49 @@ const MAX_HISTORY_MESSAGES = 10;
 const MAX_LEARNING_GAPS = 5;
 const MAX_PENDING_ASSIGNMENTS = 8;
 
+/*
+ * ------------------------------------------------------------
+ * OPENAI FETCH TRANSPORT
+ * ------------------------------------------------------------
+ *
+ * Undici 8 has its own Request/Response types, while the
+ * OpenAI SDK expects the standard Fetch API types.
+ *
+ * The unknown cast intentionally bridges those compatible
+ * runtime implementations without changing the actual
+ * network transport.
+ *
+ * ------------------------------------------------------------
+ */
+
+const openaiFetch: typeof globalThis.fetch = (
+  input,
+  init
+) => {
+  return undiciFetch(
+    input as Parameters<typeof undiciFetch>[0],
+    init as Parameters<typeof undiciFetch>[1]
+  ) as unknown as Promise<Response>;
+};
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   timeout: OPENAI_TIMEOUT,
-  maxRetries: 3,
+  maxRetries: 0,
+  fetch: openaiFetch,
+  fetchOptions: {
+    dispatcher: new Agent({
+      headersTimeout: OPENAI_TIMEOUT,
+      bodyTimeout: OPENAI_TIMEOUT,
+    }),
+  },
 });
+
+/*
+ * ------------------------------------------------------------
+ * HELPERS
+ * ------------------------------------------------------------
+ */
 
 function cleanMessage(value: unknown): string {
   if (typeof value !== "string") {
@@ -74,6 +113,12 @@ function extractMessage(response: unknown): string {
   return "";
 }
 
+/*
+ * ------------------------------------------------------------
+ * POST /api/chat
+ * ------------------------------------------------------------
+ */
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -81,26 +126,50 @@ export async function POST(request: NextRequest) {
     const message = cleanMessage(body?.message);
     const sessionId = cleanMessage(body?.sessionId);
 
+    /*
+     * ----------------------------------------------------------
+     * VALIDATION
+     * ----------------------------------------------------------
+     */
+
     if (!message) {
       return NextResponse.json(
-        { error: "Message is required." },
-        { status: 400 }
+        {
+          error: "Message is required.",
+        },
+        {
+          status: 400,
+        }
       );
     }
 
     if (!sessionId) {
       return NextResponse.json(
-        { error: "Session ID is required." },
-        { status: 400 }
+        {
+          error: "Session ID is required.",
+        },
+        {
+          status: 400,
+        }
       );
     }
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
-        { error: "OpenAI API key is not configured." },
-        { status: 500 }
+        {
+          error: "OpenAI API key is not configured.",
+        },
+        {
+          status: 500,
+        }
       );
     }
+
+    /*
+     * ----------------------------------------------------------
+     * SUPABASE AUTH
+     * ----------------------------------------------------------
+     */
 
     const supabase = await createClient();
 
@@ -111,18 +180,25 @@ export async function POST(request: NextRequest) {
 
     if (userError || !user) {
       return NextResponse.json(
-        { error: "You must be logged in." },
-        { status: 401 }
+        {
+          error: "You must be logged in.",
+        },
+        {
+          status: 401,
+        }
       );
     }
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * VERIFY CHAT SESSION
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
-    const { data: session, error: sessionError } = await supabase
+    const {
+      data: session,
+      error: sessionError,
+    } = await supabase
       .from("chat_sessions")
       .select("id, student_id")
       .eq("id", sessionId)
@@ -130,45 +206,64 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (sessionError) {
-      console.error("Chat session lookup error:", sessionError);
+      console.error(
+        "Chat session lookup error:",
+        sessionError
+      );
 
       return NextResponse.json(
-        { error: "Unable to verify chat session." },
-        { status: 500 }
+        {
+          error: "Unable to verify chat session.",
+        },
+        {
+          status: 500,
+        }
       );
     }
 
     if (!session) {
       return NextResponse.json(
-        { error: "Chat session not found." },
-        { status: 404 }
+        {
+          error: "Chat session not found.",
+        },
+        {
+          status: 404,
+        }
       );
     }
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * STUDENT PROFILE
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
-    const { data: profile, error: profileError } = await supabase
+    const {
+      data: profile,
+      error: profileError,
+    } = await supabase
       .from("profiles")
       .select("id, name, email, role")
       .eq("id", user.id)
       .maybeSingle();
 
     if (profileError) {
-      console.error("Profile lookup error:", profileError);
+      console.error(
+        "Profile lookup error:",
+        profileError
+      );
     }
 
-    const { data: studentProfile, error: studentProfileError } =
-      await supabase
-        .from("student_profiles")
-        .select(
-          "id, student_id, grade, goals, learning_preferences"
-        )
-        .eq("id", user.id)
-        .maybeSingle();
+    const {
+      data: studentProfile,
+      error: studentProfileError,
+    } = await supabase
+      .from("student_profiles")
+      .select(
+        "id, student_id, grade, goals, learning_preferences"
+      )
+      .eq("id", user.id)
+      .maybeSingle();
 
     if (studentProfileError) {
       console.error(
@@ -180,26 +275,24 @@ export async function POST(request: NextRequest) {
     const studentName = profile?.name || "Student";
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * LEARNING GAPS
-     *
-     * We still retrieve the student's gaps, but only send a small
-     * relevant set to OpenAI instead of dumping every historical
-     * row into the prompt.
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
-    const { data: learningGaps, error: learningGapsError } =
-      await supabase
-        .from("learning_gaps")
-        .select(
-          "id, subject, topic, gap_level, recommendation, created_at"
-        )
-        .eq("student_id", user.id)
-        .order("created_at", {
-          ascending: false,
-        })
-        .limit(20);
+    const {
+      data: learningGaps,
+      error: learningGapsError,
+    } = await supabase
+      .from("learning_gaps")
+      .select(
+        "id, subject, topic, gap_level, recommendation, created_at"
+      )
+      .eq("student_id", user.id)
+      .order("created_at", {
+        ascending: false,
+      })
+      .limit(20);
 
     if (learningGapsError) {
       console.error(
@@ -209,22 +302,24 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * DIAGNOSTIC TESTS
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
-    const { data: diagnosticTests, error: diagnosticTestsError } =
-      await supabase
-        .from("diagnostic_tests")
-        .select(
-          "id, subject, score, completed_at, created_at"
-        )
-        .eq("student_id", user.id)
-        .order("created_at", {
-          ascending: false,
-        })
-        .limit(5);
+    const {
+      data: diagnosticTests,
+      error: diagnosticTestsError,
+    } = await supabase
+      .from("diagnostic_tests")
+      .select(
+        "id, subject, score, completed_at, created_at"
+      )
+      .eq("student_id", user.id)
+      .order("created_at", {
+        ascending: false,
+      })
+      .limit(5);
 
     if (diagnosticTestsError) {
       console.error(
@@ -242,10 +337,14 @@ export async function POST(request: NextRequest) {
       created_at: string;
     }> = [];
 
-    if (diagnosticTests && diagnosticTests.length > 0) {
-      const diagnosticTestIds = diagnosticTests.map(
-        (test) => test.id
-      );
+    if (
+      diagnosticTests &&
+      diagnosticTests.length > 0
+    ) {
+      const diagnosticTestIds =
+        diagnosticTests.map(
+          (test) => test.id
+        );
 
       const {
         data: results,
@@ -255,7 +354,10 @@ export async function POST(request: NextRequest) {
         .select(
           "id, diagnostic_test_id, topic, score, gap_level, created_at"
         )
-        .in("diagnostic_test_id", diagnosticTestIds)
+        .in(
+          "diagnostic_test_id",
+          diagnosticTestIds
+        )
         .order("created_at", {
           ascending: false,
         })
@@ -272,28 +374,30 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * COURSES
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
-    const { data: enrollments, error: enrollmentsError } =
-      await supabase
-        .from("enrollments")
-        .select(
-          `
+    const {
+      data: enrollments,
+      error: enrollmentsError,
+    } = await supabase
+      .from("enrollments")
+      .select(
+        `
+          id,
+          enroll_id,
+          course_id,
+          enrolled_at,
+          courses (
             id,
-            enroll_id,
             course_id,
-            enrolled_at,
-            courses (
-              id,
-              course_id,
-              title
-            )
-          `
-        )
-        .eq("student_id", user.id);
+            title
+          )
+        `
+      )
+      .eq("student_id", user.id);
 
     if (enrollmentsError) {
       console.error(
@@ -304,25 +408,33 @@ export async function POST(request: NextRequest) {
 
     const courseIds =
       enrollments
-        ?.map((enrollment) => enrollment.course_id)
+        ?.map(
+          (enrollment) =>
+            enrollment.course_id
+        )
         .filter(Boolean) || [];
 
     const courseInformation =
       enrollments?.map((enrollment) => {
-        const course = Array.isArray(enrollment.courses)
+        const course = Array.isArray(
+          enrollment.courses
+        )
           ? enrollment.courses[0]
           : enrollment.courses;
 
         return {
-          courseId: course?.course_id || "",
-          title: course?.title || "Unknown Course",
+          courseId:
+            course?.course_id || "",
+          title:
+            course?.title ||
+            "Unknown Course",
         };
       }) || [];
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * ASSIGNMENTS
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
     let assignments: Array<{
@@ -343,7 +455,10 @@ export async function POST(request: NextRequest) {
         .select(
           "id, assign_id, course_id, title, max_points, due_date"
         )
-        .in("course_id", courseIds)
+        .in(
+          "course_id",
+          courseIds
+        )
         .order("due_date", {
           ascending: true,
         });
@@ -354,23 +469,26 @@ export async function POST(request: NextRequest) {
           assignmentsError
         );
       } else {
-        assignments = assignmentData || [];
+        assignments =
+          assignmentData || [];
       }
     }
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * SUBMISSIONS
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
-    const { data: submissions, error: submissionsError } =
-      await supabase
-        .from("submissions")
-        .select(
-          "id, assignment_id, student_id, score, submitted_at"
-        )
-        .eq("student_id", user.id);
+    const {
+      data: submissions,
+      error: submissionsError,
+    } = await supabase
+      .from("submissions")
+      .select(
+        "id, assignment_id, student_id, score, submitted_at"
+      )
+      .eq("student_id", user.id);
 
     if (submissionsError) {
       console.error(
@@ -380,23 +498,24 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * RECENT CHAT HISTORY
-     *
-     * Previously we sent up to 30 messages.
-     * We now use only the most recent 10.
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
-    const { data: chatMessages, error: chatMessagesError } =
-      await supabase
-        .from("chat_messages")
-        .select("id, sender, message, created_at")
-        .eq("session_id", sessionId)
-        .order("created_at", {
-          ascending: false,
-        })
-        .limit(MAX_HISTORY_MESSAGES);
+    const {
+      data: chatMessages,
+      error: chatMessagesError,
+    } = await supabase
+      .from("chat_messages")
+      .select(
+        "id, sender, message, created_at"
+      )
+      .eq("session_id", sessionId)
+      .order("created_at", {
+        ascending: false,
+      })
+      .limit(MAX_HISTORY_MESSAGES);
 
     if (chatMessagesError) {
       console.error(
@@ -405,56 +524,76 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const recentMessages = [...(chatMessages || [])].reverse();
+    const recentMessages =
+      [...(chatMessages || [])].reverse();
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * ASSIGNMENT INFORMATION
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
-    const assignmentInformation = assignments.map((assignment) => {
-      const submission = submissions?.find(
-        (item) => item.assignment_id === assignment.id
-      );
+    const assignmentInformation =
+      assignments.map((assignment) => {
+        const submission =
+          submissions?.find(
+            (item) =>
+              item.assignment_id ===
+              assignment.id
+          );
 
-      const percentage =
-        submission && assignment.max_points > 0
-          ? Math.round(
-              (Number(submission.score) /
-                Number(assignment.max_points)) *
-                100
-            )
-          : null;
+        const percentage =
+          submission &&
+          assignment.max_points > 0
+            ? Math.round(
+                (Number(
+                  submission.score
+                ) /
+                  Number(
+                    assignment.max_points
+                  )) *
+                  100
+              )
+            : null;
 
-      return {
-        assignmentId: assignment.assign_id,
-        title: assignment.title,
-        courseId: assignment.course_id,
-        maxPoints: Number(assignment.max_points),
-        score: submission
-          ? Number(submission.score)
-          : null,
-        percentage,
-        completed: Boolean(submission),
-        dueDate: assignment.due_date,
-      };
-    });
+        return {
+          assignmentId:
+            assignment.assign_id,
+          title: assignment.title,
+          courseId:
+            assignment.course_id,
+          maxPoints: Number(
+            assignment.max_points
+          ),
+          score: submission
+            ? Number(
+                submission.score
+              )
+            : null,
+          percentage,
+          completed:
+            Boolean(submission),
+          dueDate:
+            assignment.due_date,
+        };
+      });
 
     const completedAssignments =
       assignmentInformation.filter(
-        (assignment) => assignment.completed
+        (assignment) =>
+          assignment.completed
       );
 
     const pendingAssignments =
       assignmentInformation.filter(
-        (assignment) => !assignment.completed
+        (assignment) =>
+          !assignment.completed
       );
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * OVERALL PERFORMANCE
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
     let totalEarnedPoints = 0;
@@ -480,83 +619,86 @@ export async function POST(request: NextRequest) {
         : null;
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * COURSE PERFORMANCE
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
-    const coursePerformance = courseInformation.map(
-      (course) => {
-        const courseAssignments =
-          assignmentInformation.filter(
-            (assignment) =>
-              assignment.courseId === course.courseId
-          );
+    const coursePerformance =
+      courseInformation.map(
+        (course) => {
+          const courseAssignments =
+            assignmentInformation.filter(
+              (assignment) =>
+                assignment.courseId ===
+                course.courseId
+            );
 
-        const completedCourseAssignments =
-          courseAssignments.filter(
-            (assignment) => assignment.completed
-          );
+          const completedCourseAssignments =
+            courseAssignments.filter(
+              (assignment) =>
+                assignment.completed
+            );
 
-        let earned = 0;
-        let possible = 0;
+          let earned = 0;
+          let possible = 0;
 
-        for (const assignment of completedCourseAssignments) {
-          earned += Number(
-            assignment.score || 0
-          );
+          for (const assignment of completedCourseAssignments) {
+            earned += Number(
+              assignment.score || 0
+            );
 
-          possible += Number(
-            assignment.maxPoints || 0
-          );
+            possible += Number(
+              assignment.maxPoints || 0
+            );
+          }
+
+          const average =
+            possible > 0
+              ? Math.round(
+                  (earned /
+                    possible) *
+                    100
+                )
+              : null;
+
+          return {
+            courseId:
+              course.courseId,
+            title:
+              course.title,
+            completed:
+              completedCourseAssignments.length,
+            total:
+              courseAssignments.length,
+            average,
+          };
         }
-
-        const average =
-          possible > 0
-            ? Math.round(
-                (earned / possible) * 100
-              )
-            : null;
-
-        return {
-          courseId: course.courseId,
-          title: course.title,
-          completed:
-            completedCourseAssignments.length,
-          total:
-            courseAssignments.length,
-          average,
-        };
-      }
-    );
+      );
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * GAP PRIORITIES
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
     const highPriorityGaps =
       learningGaps?.filter(
-        (gap) => gap.gap_level === "high"
+        (gap) =>
+          gap.gap_level === "high"
       ) || [];
 
     const mediumPriorityGaps =
       learningGaps?.filter(
-        (gap) => gap.gap_level === "medium"
+        (gap) =>
+          gap.gap_level === "medium"
       ) || [];
 
     const lowPriorityGaps =
       learningGaps?.filter(
-        (gap) => gap.gap_level === "low"
+        (gap) =>
+          gap.gap_level === "low"
       ) || [];
-
-    /*
-     * Keep only the most useful gaps.
-     *
-     * Priority:
-     * high -> medium -> low
-     */
 
     const selectedLearningGaps = [
       ...highPriorityGaps,
@@ -567,48 +709,22 @@ export async function POST(request: NextRequest) {
       .map((gap) => ({
         subject: gap.subject,
         topic: gap.topic,
-        gapLevel: gap.gap_level,
+        gapLevel:
+          gap.gap_level,
         recommendation:
-          gap.recommendation || null,
+          gap.recommendation ||
+          null,
       }));
 
     /*
-     * ------------------------------------------------------------
-     * STRONGEST / WEAKEST COURSE
-     * ------------------------------------------------------------
-     */
-
-    const coursesWithScores =
-      coursePerformance.filter(
-        (course) => course.average !== null
-      );
-
-    const strongestCourse =
-      coursesWithScores.length > 0
-        ? [...coursesWithScores].sort(
-            (a, b) =>
-              Number(b.average) -
-              Number(a.average)
-          )[0]
-        : null;
-
-    const weakestCourse =
-      coursesWithScores.length > 0
-        ? [...coursesWithScores].sort(
-            (a, b) =>
-              Number(a.average) -
-              Number(b.average)
-          )[0]
-        : null;
-
-    /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * LATEST DIAGNOSTIC
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
     const latestDiagnostic =
-      diagnosticTests && diagnosticTests.length > 0
+      diagnosticTests &&
+      diagnosticTests.length > 0
         ? diagnosticTests[0]
         : null;
 
@@ -622,58 +738,82 @@ export async function POST(request: NextRequest) {
         : [];
 
     /*
-     * ------------------------------------------------------------
-     * COMPACT DATA FOR THE AI
-     * ------------------------------------------------------------
-     *
-     * This is intentionally much smaller than the previous
-     * databaseContext.
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
+     * COMPACT DATA FOR AI
+     * ----------------------------------------------------------
      */
 
     const compactCoursePerformance =
-      coursePerformance.map((course) => ({
-        course: course.title,
-        completed: `${course.completed}/${course.total}`,
-        performance:
-          course.average !== null
-            ? `${course.average}%`
-            : "No scored work",
-      }));
+      coursePerformance.map(
+        (course) => ({
+          course:
+            course.title,
+          completed:
+            `${course.completed}/${course.total}`,
+          performance:
+            course.average !==
+            null
+              ? `${course.average}%`
+              : "No scored work",
+        })
+      );
 
     const compactPendingAssignments =
       pendingAssignments
-        .slice(0, MAX_PENDING_ASSIGNMENTS)
-        .map((assignment) => ({
-          title: assignment.title,
-          course:
-            courseInformation.find(
-              (course) =>
-                course.courseId ===
-                assignment.courseId
-            )?.title || "Unknown course",
-          dueDate: assignment.dueDate,
-        }));
+        .slice(
+          0,
+          MAX_PENDING_ASSIGNMENTS
+        )
+        .map(
+          (assignment) => ({
+            title:
+              assignment.title,
+            course:
+              courseInformation.find(
+                (course) =>
+                  course.courseId ===
+                  assignment.courseId
+              )?.title ||
+              "Unknown course",
+            dueDate:
+              assignment.dueDate,
+          })
+        );
 
-    const compactLatestDiagnostic = latestDiagnostic
-      ? {
-          subject: latestDiagnostic.subject,
-          score: Number(latestDiagnostic.score),
-          topics: latestDiagnosticResults.map(
-            (result) => ({
-              topic: result.topic,
-              score: Number(result.score),
-              gapLevel: result.gap_level,
-            })
-          ),
-        }
-      : null;
+    const compactLatestDiagnostic =
+      latestDiagnostic
+        ? {
+            subject:
+              latestDiagnostic.subject,
+            score: Number(
+              latestDiagnostic.score
+            ),
+            topics:
+              latestDiagnosticResults.map(
+                (result) => ({
+                  topic:
+                    result.topic,
+                  score: Number(
+                    result.score
+                  ),
+                  gapLevel:
+                    result.gap_level,
+                })
+              ),
+          }
+        : null;
 
     const databaseContext = `
 STUDENT
 Name: ${studentName}
-Grade: ${studentProfile?.grade || "Not available"}
-Goals: ${studentProfile?.goals || "Not available"}
+Grade: ${
+      studentProfile?.grade ||
+      "Not available"
+    }
+Goals: ${
+      studentProfile?.goals ||
+      "Not available"
+    }
 Learning preferences: ${
       studentProfile?.learning_preferences ||
       "Not available"
@@ -681,27 +821,40 @@ Learning preferences: ${
 
 ACADEMIC SUMMARY
 Overall assignment performance: ${
-      overallAssignmentPerformance !== null
+      overallAssignmentPerformance !==
+      null
         ? `${overallAssignmentPerformance}%`
         : "Not available"
     }
-Completed assignments: ${completedAssignments.length}
-Pending assignments: ${pendingAssignments.length}
+Completed assignments: ${
+      completedAssignments.length
+    }
+Pending assignments: ${
+      pendingAssignments.length
+    }
 
 COURSES
 ${JSON.stringify(courseInformation)}
 
 COURSE PERFORMANCE
-${JSON.stringify(compactCoursePerformance)}
+${JSON.stringify(
+      compactCoursePerformance
+    )}
 
 PENDING ASSIGNMENTS
-${JSON.stringify(compactPendingAssignments)}
+${JSON.stringify(
+      compactPendingAssignments
+    )}
 
 LATEST DIAGNOSTIC
-${JSON.stringify(compactLatestDiagnostic)}
+${JSON.stringify(
+      compactLatestDiagnostic
+    )}
 
 RELEVANT LEARNING GAPS
-${JSON.stringify(selectedLearningGaps)}
+${JSON.stringify(
+      selectedLearningGaps
+    )}
 
 GAP COUNTS
 High: ${highPriorityGaps.length}
@@ -710,16 +863,17 @@ Low: ${lowPriorityGaps.length}
 `;
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * CONVERSATION CONTEXT
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
     const conversationContext =
       recentMessages
         .map((item) => {
           const sender =
-            item.sender === "student"
+            item.sender ===
+            "student"
               ? "STUDENT"
               : "AI";
 
@@ -728,9 +882,9 @@ Low: ${lowPriorityGaps.length}
         .join("\n");
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * AI INSTRUCTIONS
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
     const instructions = `
@@ -935,33 +1089,42 @@ Be detailed when teaching requires it.
 Always aim to help the student make academic progress.
 `;
 
-    console.log("LearnNova personalized AI request:", {
-      student: studentName,
-      sessionId,
-      messageLength: message.length,
-      historyMessages: recentMessages.length,
-      courses: courseInformation.length,
-      assignments: assignmentInformation.length,
-      completedAssignments:
-        completedAssignments.length,
-      pendingAssignments:
-        pendingAssignments.length,
-      learningGaps:
-        learningGaps?.length || 0,
-      selectedLearningGaps:
-        selectedLearningGaps.length,
-      highPriorityGaps:
-        highPriorityGaps.length,
-      mediumPriorityGaps:
-        mediumPriorityGaps.length,
-      latestDiagnostic:
-        latestDiagnostic?.subject || null,
-    });
+    console.log(
+      "LearnNova personalized AI request:",
+      {
+        student: studentName,
+        sessionId,
+        messageLength:
+          message.length,
+        historyMessages:
+          recentMessages.length,
+        courses:
+          courseInformation.length,
+        assignments:
+          assignmentInformation.length,
+        completedAssignments:
+          completedAssignments.length,
+        pendingAssignments:
+          pendingAssignments.length,
+        learningGaps:
+          learningGaps?.length ||
+          0,
+        selectedLearningGaps:
+          selectedLearningGaps.length,
+        highPriorityGaps:
+          highPriorityGaps.length,
+        mediumPriorityGaps:
+          mediumPriorityGaps.length,
+        latestDiagnostic:
+          latestDiagnostic?.subject ||
+          null,
+      }
+    );
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * OPENAI REQUEST
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
     let response;
@@ -980,9 +1143,12 @@ Always aim to help the student make academic progress.
       );
 
       if (
-        error instanceof OpenAI.APIError
+        error instanceof
+        OpenAI.APIError
       ) {
-        if (error.status === 429) {
+        if (
+          error.status === 429
+        ) {
           return NextResponse.json(
             {
               error:
@@ -1021,9 +1187,9 @@ Always aim to help the student make academic progress.
     }
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * EXTRACT AI RESPONSE
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
     const aiText =
@@ -1047,9 +1213,9 @@ Always aim to help the student make academic progress.
     }
 
     /*
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      * RETURN RESPONSE
-     * ------------------------------------------------------------
+     * ----------------------------------------------------------
      */
 
     return NextResponse.json({

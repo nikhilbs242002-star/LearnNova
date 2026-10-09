@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -28,27 +29,26 @@ export default function LearnNovaIntro({
 
   return (
     <div
-      className={`fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-slate-950 transition-opacity duration-700 ${
+      className={`fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-[#101713] transition-opacity duration-700 ${
         closing ? "opacity-0" : "opacity-100"
       }`}
     >
-      {/* Background glow */}
-      <div className="absolute inset-0">
-        <div className="absolute left-1/2 top-1/2 h-[500px] w-[500px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-600/20 blur-[100px]" />
+      {/* Forest-green background with champagne and sage glows */}
+      <div className="absolute inset-0 overflow-hidden">
+        <div className="absolute left-1/2 top-1/2 h-[550px] w-[550px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#D8B878]/[0.10] blur-[120px]" />
 
-        <div className="absolute left-[20%] top-[20%] h-40 w-40 rounded-full bg-purple-500/10 blur-3xl" />
+        <div className="absolute left-[15%] top-[15%] h-64 w-64 rounded-full bg-[#B9E4A5]/[0.07] blur-[100px]" />
 
-        <div className="absolute bottom-[15%] right-[15%] h-48 w-48 rounded-full bg-cyan-400/10 blur-3xl" />
+        <div className="absolute bottom-[10%] right-[12%] h-72 w-72 rounded-full bg-[#D8B878]/[0.07] blur-[110px]" />
+
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-[#080D09]/50" />
       </div>
 
-      {/* Content */}
-      <div className="relative flex flex-col items-center">
-
-        {/* Book */}
+      {/* Intro content */}
+      <div className="relative flex flex-col items-center px-5">
+        {/* Opening book */}
         <div className="book-scene">
-
           <div className="book">
-
             {/* Left page */}
             <div className="book-page book-left">
               <div className="page-content">
@@ -67,49 +67,39 @@ export default function LearnNovaIntro({
               </div>
             </div>
 
-            {/* Center spine */}
+            {/* Book spine */}
             <div className="book-spine" />
-
           </div>
         </div>
 
-        {/* Brand */}
+        {/* Champagne-gold brand */}
         <div className="mt-12 text-center">
-
-          <h1 className="text-5xl font-black tracking-tight text-white sm:text-6xl">
-            <span className="bg-gradient-to-r from-blue-400 via-cyan-300 to-purple-400 bg-clip-text text-transparent">
-              LearnNova
-            </span>
+          <h1 className="brand-title text-5xl font-black tracking-tight sm:text-6xl md:text-7xl">
+            LearnNova
           </h1>
 
-          <p className="mt-4 text-sm font-medium tracking-[0.3em] text-slate-400 uppercase">
+          <p className="mt-4 text-xs font-medium tracking-[0.22em] text-[#C2CBB6] uppercase sm:text-sm sm:tracking-[0.3em]">
             Learn smarter. Grow further.
           </p>
-
         </div>
 
-        {/* Loading indicator */}
-        <div className="mt-8 flex items-center gap-2">
-
-          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-400" />
-          <span
-            className="h-2 w-2 animate-pulse rounded-full bg-cyan-400"
-            style={{ animationDelay: "150ms" }}
-          />
-          <span
-            className="h-2 w-2 animate-pulse rounded-full bg-purple-400"
-            style={{ animationDelay: "300ms" }}
-          />
-
+        {/* Gold and sage loading dots */}
+        <div className="mt-9 flex items-center gap-2.5">
+          <span className="loading-dot loading-gold" />
+          <span className="loading-dot loading-sage" />
+          <span className="loading-dot loading-ivory" />
         </div>
-
       </div>
 
       <style jsx>{`
         .book-scene {
           perspective: 1200px;
-          width: 260px;
-          height: 170px;
+          width: 264px;
+          height: 190px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          filter: drop-shadow(0 15px 30px rgba(0, 0, 0, 0.25));
         }
 
         .book {
@@ -125,15 +115,17 @@ export default function LearnNovaIntro({
           top: 0;
           width: 130px;
           height: 170px;
+          overflow: hidden;
           background: linear-gradient(
             135deg,
-            #ffffff 0%,
-            #f8fafc 70%,
-            #e2e8f0 100%
+            #fffdf4 0%,
+            #f5ebd1 70%,
+            #e8d5a9 100%
           );
           box-shadow:
-            0 15px 30px rgba(0, 0, 0, 0.25),
-            inset 0 0 20px rgba(148, 163, 184, 0.12);
+            0 12px 28px rgba(0, 0, 0, 0.24),
+            inset 0 0 18px rgba(216, 184, 120, 0.13);
+          backface-visibility: visible;
         }
 
         .book-left {
@@ -160,12 +152,12 @@ export default function LearnNovaIntro({
           height: 170px;
           transform: translateX(-50%);
           background: linear-gradient(
-            to bottom,
-            #cbd5e1,
-            #94a3b8,
-            #cbd5e1
+            to right,
+            #b38c48,
+            #f5dfa6,
+            #c19a55
           );
-          box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+          box-shadow: 0 0 14px rgba(216, 184, 120, 0.35);
           z-index: 5;
         }
 
@@ -173,7 +165,7 @@ export default function LearnNovaIntro({
           display: flex;
           flex-direction: column;
           gap: 12px;
-          padding: 35px 20px;
+          padding: 35px 14px;
           opacity: 0;
           animation: contentAppear 1s ease 1.2s forwards;
         }
@@ -181,14 +173,55 @@ export default function LearnNovaIntro({
         .page-line {
           height: 5px;
           border-radius: 999px;
-          background: #cbd5e1;
+          background: linear-gradient(
+            90deg,
+            #d8c28e,
+            #b8c49d
+          );
+        }
+
+        .brand-title {
+          color: #f5e5b8;
+          background: linear-gradient(
+            105deg,
+            #fff3cc 0%,
+            #d8b878 35%,
+            #f5e4b3 65%,
+            #bda064 100%
+          );
+          background-clip: text;
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          filter: drop-shadow(0 5px 22px rgba(216, 184, 120, 0.13));
+        }
+
+        .loading-dot {
+          display: block;
+          width: 9px;
+          height: 9px;
+          border-radius: 999px;
+          animation: dotPulse 1.05s ease-in-out infinite;
+        }
+
+        .loading-gold {
+          background: #d8b878;
+          box-shadow: 0 0 12px rgba(216, 184, 120, 0.25);
+        }
+
+        .loading-sage {
+          background: #b9e4a5;
+          animation-delay: 150ms;
+        }
+
+        .loading-ivory {
+          background: #f4e8cc;
+          animation-delay: 300ms;
         }
 
         @keyframes openLeft {
           0% {
             transform: rotateY(0deg);
           }
-
           100% {
             transform: rotateY(-155deg);
           }
@@ -198,7 +231,6 @@ export default function LearnNovaIntro({
           0% {
             transform: rotateY(0deg);
           }
-
           100% {
             transform: rotateY(155deg);
           }
@@ -208,15 +240,12 @@ export default function LearnNovaIntro({
           0% {
             transform: translateY(20px) scale(0.85);
           }
-
           35% {
             transform: translateY(0) scale(1);
           }
-
           75% {
             transform: translateY(-5px) scale(1);
           }
-
           100% {
             transform: translateY(-5px) scale(1);
           }
@@ -225,10 +254,41 @@ export default function LearnNovaIntro({
         @keyframes contentAppear {
           from {
             opacity: 0;
+            transform: translateY(5px);
           }
-
           to {
             opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @keyframes dotPulse {
+          0%,
+          100% {
+            opacity: 0.45;
+            transform: scale(0.85);
+          }
+          50% {
+            opacity: 1;
+            transform: scale(1.12);
+          }
+        }
+
+        @media (max-width: 480px) {
+          .book-scene {
+            transform: scale(0.86);
+            margin-bottom: -10px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .book,
+          .book-left,
+          .book-right,
+          .page-content,
+          .loading-dot {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
           }
         }
       `}</style>
